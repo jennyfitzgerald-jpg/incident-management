@@ -18,12 +18,13 @@ git init
 git add app.py modules config requirements.txt .streamlit .env.example .gitignore README.md DEPLOYMENT.md DEPLOY_NOW.md tests run_tests.bat
 git commit -m "Incident Management with OAuth - ready for deployment"
 
-# Create a NEW empty repo on GitHub: https://github.com/new (e.g. name: incident-management)
-# Then run (replace YOUR_USERNAME and YOUR_REPO with yours):
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
+# Create a NEW empty repo on GitHub (page may already be open: github.com/new, name: incident-management).
+# Do NOT add a README or .gitignore (we already have them). Create repository.
+# Then run (replace YOUR_USERNAME and YOUR_REPO with your GitHub username and repo name):
+git remote set-url origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
 git push -u origin main
 ```
+If this is the first time: `git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git` then `git push -u origin main`.
 
 ---
 
