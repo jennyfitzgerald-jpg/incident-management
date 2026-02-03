@@ -1,0 +1,27 @@
+# Environment and secrets (never commit)
+.env
+.env.local
+.env.*.local
+
+# Database and auth store (deployed apps use ephemeral or external DB)
+database/*.db
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml

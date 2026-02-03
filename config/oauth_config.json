@@ -1,0 +1,51 @@
+{
+  "providers": {
+    "azure": {
+      "name": "Microsoft Entra ID",
+      "authority": "https://login.microsoftonline.com/{tenant_id}",
+      "scopes": ["User.Read", "openid", "profile", "email"],
+      "token_endpoint": "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+      "authorize_endpoint": "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize",
+      "userinfo_endpoint": "https://graph.microsoft.com/v1.0/me"
+    },
+    "google": {
+      "name": "Google Workspace",
+      "authority": "https://accounts.google.com",
+      "scopes": ["openid", "email", "profile"],
+      "token_endpoint": "https://oauth2.googleapis.com/token",
+      "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+      "userinfo_endpoint": "https://www.googleapis.com/oauth2/v3/userinfo"
+    },
+    "oidc": {
+      "name": "Generic OIDC",
+      "scopes": ["openid", "email", "profile"],
+      "note": "Configure discovery URL in .env"
+    }
+  },
+  "roles": {
+    "viewer": {
+      "name": "Viewer",
+      "description": "Can view events and reports",
+      "permissions": ["view_events", "view_reports", "view_analytics"]
+    },
+    "reporter": {
+      "name": "Reporter",
+      "description": "Can log new events",
+      "permissions": ["view_events", "view_reports", "view_analytics", "create_events"]
+    },
+    "investigator": {
+      "name": "Investigator",
+      "description": "Can update incidents and add root cause analysis",
+      "permissions": ["view_events", "view_reports", "view_analytics", "create_events", "update_events", "add_rca"]
+    },
+    "admin": {
+      "name": "Administrator",
+      "description": "Full access including user management",
+      "permissions": ["view_events", "view_reports", "view_analytics", "create_events", "update_events", "add_rca", "delete_events", "manage_users", "view_audit_log", "export_data"]
+    }
+  },
+  "session": {
+    "timeout_minutes": 60,
+    "refresh_threshold_minutes": 5
+  }
+}
