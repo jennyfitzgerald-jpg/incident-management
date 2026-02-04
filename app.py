@@ -91,13 +91,19 @@ def handle_oauth_callback() -> bool:
 
 
 def show_login_page():
-    """Show login: OAuth redirect or demo form (only when not production)."""
+    """Show login: Firebase Google Sign-In, OAuth redirect, or demo form (only when not production)."""
     st.markdown("# Diagnexia Incident Management")
     st.markdown("Digital Pathology Incident Logging Framework")
+    if isinstance(auth, FirebaseAuthManager):
+        # Firebase: render Google Sign-In button (HTML/JS). Redirect uses current page URL so no secret needed.
+        st.markdown("Sign in with your Google account.")
+        html = auth.get_login_component("")  # empty = use browser's current URL for redirect
+        st.components.v1.html(html, height=80)
+        return
     if auth.is_configured():
         # OAuth: start flow (state + PKCE in store, rate-limited)
         if isinstance(auth, AuthManager):
-            request_host = None  # Could be set from request if available
+            request_host = None
             auth_url, state_cookie_value = auth.login(request_host=request_host, request_path="/")
             if not auth_url:
                 st.error("Too many login attempts. Please try again later.")
@@ -105,7 +111,7 @@ def show_login_page():
             st.markdown("Sign in with your organization account.")
             st.link_button("Sign in", auth_url, type="primary")
     else:
-        # Demo mode (only when ENV != production; get_auth_manager already enforces)
+        # Demo mode (only when ENV != production)
         st.info("Demo mode: OAuth is not configured.")
         with st.form("demo_login"):
             email = st.text_input("Email")
@@ -119,13 +125,25 @@ def show_login_page():
 
 
 def show_dashboard():
-    """Minimal dashboard after login."""
+    """Dashboard after login: welcome, navigation placeholders, sign out."""
     user = auth.get_user()
     st.markdown(f"Welcome, **{user.get('name') or user.get('email')}**")
     if auth.is_admin():
         st.caption("(Admin)")
     st.markdown("---")
-    st.info("Incident Management dashboard. Configure database and other modules to add events and reports.")
+
+    st.subheader("Incident log")
+    st.markdown("Log and track digital pathology incidents. *(Add your incident form and list here.)*")
+    st.markdown("---")
+
+    st.subheader("Decision support")
+    st.markdown("Tools and guidance for incident handling. *(Add decision trees or workflows here.)*")
+    st.markdown("---")
+
+    st.subheader("Reports")
+    st.markdown("View and export incident reports. *(Add reporting module here.)*")
+
+    st.markdown("---")
     if st.button("Sign out"):
         auth.logout()
         st.rerun()

@@ -818,9 +818,10 @@ class FirebaseAuthManager:
             logger.warning("Firebase token verification failed: %s", e)
             return None
 
-    def get_login_component(self, redirect_base_url: str) -> str:
-        """Return HTML/JS for Firebase Google Sign-In. On success, redirects to redirect_base_url?firebase_token=ID_TOKEN (server then exchanges for one-time code)."""
+    def get_login_component(self, redirect_base_url: str = "") -> str:
+        """Return HTML/JS for Firebase Google Sign-In. On success, redirects to same app URL with ?firebase_token=ID_TOKEN (server then exchanges for one-time code). If redirect_base_url is empty, uses current window location."""
         cfg = self.firebase_config.get_firebase_config_js()
+        base_url_js = f'"{redirect_base_url}".replace(/\\?.*$/, "")' if redirect_base_url else "(window.location.origin + window.location.pathname)"
         return f"""
 <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
@@ -833,8 +834,8 @@ class FirebaseAuthManager:
     firebase.auth().signInWithPopup(provider).then(function(result) {{
       return result.user.getIdToken();
     }}).then(function(idToken) {{
-      var url = "{redirect_base_url}".replace(/\\?.*$/, "");
-      url += (url.indexOf("?") >= 0 ? "&" : "?") + "firebase_token=" + encodeURIComponent(idToken);
+      var base = {base_url_js};
+      var url = base + (base.indexOf("?") >= 0 ? "&" : "?") + "firebase_token=" + encodeURIComponent(idToken);
       window.top.location.href = url;
     }}).catch(function(e) {{ console.error(e); alert("Sign-in failed: " + (e.message || "Unknown error")); }});
   }};
