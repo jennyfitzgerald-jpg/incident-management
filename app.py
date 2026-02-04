@@ -21,6 +21,13 @@ if hasattr(st, "secrets") and st.secrets:
             for sub_key, sub_value in value.items():
                 if isinstance(sub_value, (str, int, float, bool)):
                     os.environ.setdefault(sub_key, str(sub_value))
+    # Force Firebase (and auth) keys from st.secrets so they are never empty when set in Cloud
+    for key in ("FIREBASE_PROJECT_ID", "FIREBASE_API_KEY", "FIREBASE_AUTH_DOMAIN", "SESSION_SECRET_KEY", "ENV"):
+        try:
+            if key in st.secrets and st.secrets[key] not in (None, ""):
+                os.environ[key] = str(st.secrets[key])
+        except Exception:
+            pass
 
 st.set_page_config(
     page_title="Diagnexia Incident Management",
@@ -30,9 +37,16 @@ st.set_page_config(
 )
 
 # Lazy import so AuthConfig is only evaluated after load_dotenv
-from modules.auth import get_auth_manager, AuthConfig, AuthManager
+from modules.auth import (
+    get_auth_manager,
+    AuthConfig,
+    AuthManager,
+    FirebaseAuthManager,
+    firebase_token_to_code,
+    exchange_firebase_code_for_session,
+)
 
-# Initialize auth (may raise if ENV=production and OAuth not configured)
+# Initialize auth (Firebase, OAuth, or demo)
 try:
     auth = get_auth_manager()
 except RuntimeError as e:
@@ -118,12 +132,37 @@ def show_dashboard():
 
 
 def main():
-    # Handle OAuth callback first (code + state in URL)
-    if isinstance(auth, AuthManager):
-        q = st.query_params
-        if "code" in q and "state" in q:
-            handle_oauth_callback()
-            return
+    q = st.query_params
+
+    # Firebase: token in URL once -> verify, create one-time code, redirect to ?code= (token removed)
+    if isinstance(auth, FirebaseAuthManager) and "firebase_token" in q:
+        token = q.get("firebase_token")
+        if token:
+            code = firebase_token_to_code(auth, token)
+            if code:
+                st.query_params["code"] = code
+                del st.query_params["firebase_token"]
+                st.rerun()
+            else:
+                st.error("Sign-in failed. Please try again.")
+                st.query_params.clear()
+        return
+
+    # Firebase: one-time code -> exchange for session
+    if isinstance(auth, FirebaseAuthManager) and "code" in q and "firebase_token" not in q:
+        if exchange_firebase_code_for_session(auth, q["code"]):
+            st.query_params.clear()
+            st.rerun()
+        else:
+            st.error("Sign-in failed. Please try again.")
+            st.query_params.clear()
+        return
+
+    # OAuth callback (code + state)
+    if isinstance(auth, AuthManager) and "code" in q and "state" in q:
+        handle_oauth_callback()
+        return
+
     if auth.is_authenticated():
         show_dashboard()
     else:
