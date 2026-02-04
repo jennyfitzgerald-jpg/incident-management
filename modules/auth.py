@@ -94,32 +94,32 @@ class AuthConfig:
     """Authentication configuration. SESSION_SECRET_KEY required when OAuth is configured."""
 
     def __init__(self):
-        self.provider = os.getenv("OAUTH_PROVIDER", "azure")
-        self.redirect_uri = os.getenv("OAUTH_REDIRECT_URI", "http://localhost:8501/")
-        self.session_timeout = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
-        self.is_production = os.getenv("ENV", "").lower() == "production"
+        self.provider = _get_secret("OAUTH_PROVIDER", "azure")
+        self.redirect_uri = _get_secret("OAUTH_REDIRECT_URI", "http://localhost:8501/")
+        self.session_timeout = int(_get_secret("SESSION_TIMEOUT_MINUTES", "60"))
+        self.is_production = _get_secret("ENV", "").lower() == "production"
 
         # Session secret: required when OAuth configured; no random default in production
-        raw_secret = os.getenv("SESSION_SECRET_KEY", "")
+        raw_secret = _get_secret("SESSION_SECRET_KEY", "")
         if not raw_secret and self.is_production:
             raise RuntimeError("SESSION_SECRET_KEY must be set when ENV=production")
         self.session_secret = raw_secret or secrets.token_hex(32)
 
         # Azure AD
-        self.azure_client_id = os.getenv("AZURE_CLIENT_ID", "")
-        self.azure_client_secret = os.getenv("AZURE_CLIENT_SECRET", "")
-        self.azure_tenant_id = os.getenv("AZURE_TENANT_ID", "")
+        self.azure_client_id = _get_secret("AZURE_CLIENT_ID", "")
+        self.azure_client_secret = _get_secret("AZURE_CLIENT_SECRET", "")
+        self.azure_tenant_id = _get_secret("AZURE_TENANT_ID", "")
 
-        # Google
-        self.google_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-        self.google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        # Google (read from st.secrets on Streamlit Cloud)
+        self.google_client_id = _get_secret("GOOGLE_CLIENT_ID", "")
+        self.google_client_secret = _get_secret("GOOGLE_CLIENT_SECRET", "")
 
         # Generic OIDC
-        self.oidc_client_id = os.getenv("OIDC_CLIENT_ID", "")
-        self.oidc_client_secret = os.getenv("OIDC_CLIENT_SECRET", "")
-        self.oidc_discovery_url = os.getenv("OIDC_DISCOVERY_URL", "")
+        self.oidc_client_id = _get_secret("OIDC_CLIENT_ID", "")
+        self.oidc_client_secret = _get_secret("OIDC_CLIENT_SECRET", "")
+        self.oidc_discovery_url = _get_secret("OIDC_DISCOVERY_URL", "")
 
-        admin_users_str = os.getenv("ADMIN_USERS", "")
+        admin_users_str = _get_secret("ADMIN_USERS", "")
         self.admin_users = [e.strip() for e in admin_users_str.split(",") if e.strip()]
 
     def is_configured(self) -> bool:

@@ -21,8 +21,13 @@ if hasattr(st, "secrets") and st.secrets:
             for sub_key, sub_value in value.items():
                 if isinstance(sub_value, (str, int, float, bool)):
                     os.environ.setdefault(sub_key, str(sub_value))
-    # Force Firebase (and auth) keys from st.secrets so they are never empty when set in Cloud
-    for key in ("FIREBASE_PROJECT_ID", "FIREBASE_API_KEY", "FIREBASE_AUTH_DOMAIN", "SESSION_SECRET_KEY", "ENV"):
+    # Force auth-related keys from st.secrets so they are never empty when set in Cloud
+    force_keys = (
+        "FIREBASE_PROJECT_ID", "FIREBASE_API_KEY", "FIREBASE_AUTH_DOMAIN",
+        "SESSION_SECRET_KEY", "ENV",
+        "OAUTH_PROVIDER", "OAUTH_REDIRECT_URI", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+    )
+    for key in force_keys:
         try:
             if key in st.secrets and st.secrets[key] not in (None, ""):
                 os.environ[key] = str(st.secrets[key])
