@@ -1,0 +1,96 @@
+{
+  "title": "Incident fast-track guide",
+  "description": "Answer a few questions to get recommended actions and next steps.",
+  "incident_types": [
+    {
+      "id": "specimen",
+      "label": "Specimen / sample issue",
+      "description": "Wrong specimen, labelling, or sample quality"
+    },
+    {
+      "id": "imaging",
+      "label": "Imaging / slide quality",
+      "description": "Scanning, focus, or image artefact issues"
+    },
+    {
+      "id": "workflow",
+      "label": "Workflow / process",
+      "description": "Process deviation, delay, or procedural error"
+    },
+    {
+      "id": "equipment",
+      "label": "Equipment / system",
+      "description": "Instrument, software, or IT failure"
+    },
+    {
+      "id": "safety",
+      "label": "Safety / compliance",
+      "description": "Safety concern or regulatory compliance"
+    },
+    {
+      "id": "other",
+      "label": "Other",
+      "description": "Other incident type"
+    }
+  ],
+  "severity_levels": [
+    { "id": "low", "label": "Low", "description": "Minor impact, no patient/sample risk" },
+    { "id": "medium", "label": "Medium", "description": "Moderate impact or potential risk" },
+    { "id": "high", "label": "High", "description": "Significant impact or patient/sample risk" },
+    { "id": "critical", "label": "Critical", "description": "Immediate harm or critical system failure" }
+  ],
+  "recommendations": {
+    "specimen": {
+      "low": [
+        "Log incident in the incident log.",
+        "Notify section lead if repeat issue.",
+        "Complete local corrective action if needed."
+      ],
+      "medium": [
+        "Log incident and assign to investigator.",
+        "Notify section lead and quality contact.",
+        "Document in LIMS and consider batch impact."
+      ],
+      "high": [
+        "Log immediately and escalate to lab manager.",
+        "Assess patient/sample impact; notify clinical team if required.",
+        "Preserve evidence and start root cause investigation."
+      ],
+      "critical": [
+        "Immediate escalation to lab director and quality.",
+        "Stop affected workflow; contain and document.",
+        "Regulatory reporting may be required; follow SOP."
+      ]
+    },
+    "imaging": {
+      "low": ["Log incident.", "Re-scan or re-image if possible.", "Note in QC records."],
+      "medium": ["Log and assign.", "Assess slide/block impact.", "Technical review if recurring."],
+      "high": ["Escalate to imaging lead.", "Document and preserve.", "RCA if affecting diagnosis."],
+      "critical": ["Immediate escalation.", "Halt affected scans; clinical review.", "Follow critical incident SOP."]
+    },
+    "workflow": {
+      "low": ["Log and correct locally.", "Update checklist/SOP if needed."],
+      "medium": ["Log and notify supervisor.", "Assess impact on other samples.", "Document deviation."],
+      "high": ["Escalate; assess batch/case impact.", "Start deviation investigation.", "Quality review."],
+      "critical": ["Immediate escalation.", "Contain and document.", "Regulatory reporting per SOP."]
+    },
+    "equipment": {
+      "low": ["Log and report to technical support.", "Use backup if available."],
+      "medium": ["Log; notify technical lead.", "Assess impact on throughput.", "Service request."],
+      "high": ["Escalate to technical manager.", "Document downtime and impact.", "Alternative workflow if needed."],
+      "critical": ["Immediate escalation.", "Safety first; follow emergency SOP.", "Notify all affected users."]
+    },
+    "safety": {
+      "low": ["Log and report to safety officer.", "Local corrective action."],
+      "medium": ["Log; notify safety and supervisor.", "Document and contain.", "Review procedures."],
+      "high": ["Immediate safety officer and manager.", "Contain and document.", "Incident investigation."],
+      "critical": ["Immediate escalation; follow safety protocol.", "Regulatory and internal reporting.", "Preserve evidence."]
+    },
+    "other": {
+      "low": ["Log incident.", "Notify supervisor if unsure."],
+      "medium": ["Log and assign to appropriate lead.", "Assess impact."],
+      "high": ["Escalate to manager.", "Document and contain."],
+      "critical": ["Immediate escalation to director.", "Follow critical incident SOP."]
+    }
+  }
+}
