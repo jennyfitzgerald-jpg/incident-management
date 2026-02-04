@@ -33,6 +33,20 @@ from . import auth_store
 
 logger = logging.getLogger(__name__)
 
+
+def _get_secret(key: str, default: str = "") -> str:
+    """Get secret from os.environ first, then st.secrets (for Streamlit Cloud)."""
+    value = os.getenv(key, default)
+    if value:
+        return value
+    try:
+        if hasattr(st, "secrets") and st.secrets and key in st.secrets:
+            return str(st.secrets[key]) if st.secrets[key] is not None else default
+    except Exception:
+        pass
+    return default
+
+
 # Cookie name for OAuth state (signed)
 OAUTH_STATE_COOKIE = "oauth_state"
 OAUTH_STATE_MAX_AGE = 600  # 10 minutes
@@ -647,14 +661,206 @@ class DemoAuthManager:
         return email in self.config.admin_users if email else False
 
 
+# ---------------------------------------------------------------------------
+# Firebase Authentication (Google Sign-In via Firebase, token verified server-side only)
+# ---------------------------------------------------------------------------
+
+try:
+    import firebase_admin
+    from firebase_admin import credentials as fb_credentials, auth as firebase_auth
+    FIREBASE_ADMIN_AVAILABLE = True
+except ImportError:
+    FIREBASE_ADMIN_AVAILABLE = False
+    firebase_admin = None
+    firebase_auth = None
+
+
+class FirebaseConfig:
+    """Firebase project config for client SDK and (optional) Admin SDK."""
+
+    def __init__(self):
+        self.project_id = _get_secret("FIREBASE_PROJECT_ID", "")
+        self.api_key = _get_secret("FIREBASE_API_KEY", "")
+        self.auth_domain = _get_secret("FIREBASE_AUTH_DOMAIN", "") or (
+            f"{self.project_id}.firebaseapp.com" if self.project_id else ""
+        )
+        # Service account JSON string or path for Admin SDK (required to verify ID tokens)
+        self.service_account_json = _get_secret("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+        self.service_account_path = _get_secret("FIREBASE_SERVICE_ACCOUNT_PATH", "")
+
+    def is_configured(self) -> bool:
+        return bool(self.project_id and self.api_key)
+
+    def can_verify_tokens(self) -> bool:
+        return bool(FIREBASE_ADMIN_AVAILABLE and (self.service_account_json or self.service_account_path))
+
+    def get_firebase_config_js(self) -> str:
+        return f"""
+        apiKey: "{self.api_key}",
+        authDomain: "{self.auth_domain}",
+        projectId: "{self.project_id}"
+        """
+
+
+class _FirebaseSessionManager:
+    """Session state for Firebase-authenticated users (same keys as SessionManager for app compatibility)."""
+
+    def __init__(self, config: AuthConfig):
+        self.config = config
+
+    def create_session(self, user_info: Dict[str, Any], tokens: Dict[str, Any]) -> None:
+        st.session_state["authenticated"] = True
+        st.session_state["user"] = {
+            "email": user_info.get("email"),
+            "name": user_info.get("name"),
+            "id": user_info.get("id"),
+            "provider": "firebase",
+        }
+        st.session_state["session_created"] = datetime.utcnow().isoformat()
+        st.session_state["session_expires"] = (
+            datetime.utcnow() + timedelta(minutes=self.config.session_timeout)
+        ).isoformat()
+
+    def is_authenticated(self) -> bool:
+        if not st.session_state.get("authenticated"):
+            return False
+        expires = st.session_state.get("session_expires")
+        if expires:
+            try:
+                if datetime.utcnow() > datetime.fromisoformat(expires):
+                    self.logout()
+                    return False
+            except Exception:
+                self.logout()
+                return False
+        return True
+
+    def get_user(self) -> Optional[Dict[str, Any]]:
+        if self.is_authenticated():
+            return st.session_state.get("user")
+        return None
+
+    def get_user_email(self) -> Optional[str]:
+        u = self.get_user()
+        return u.get("email") if u else None
+
+    def logout(self) -> None:
+        for key in ["authenticated", "user", "session_created", "session_expires"]:
+            if key in st.session_state:
+                del st.session_state[key]
+
+
+class FirebaseAuthManager:
+    """Firebase Authentication: Google Sign-In via Firebase JS SDK, ID token verified with Admin SDK only."""
+
+    def __init__(self):
+        self.config = AuthConfig()
+        self.firebase_config = FirebaseConfig()
+        self.session = _FirebaseSessionManager(self.config)
+        self._admin_initialized = False
+
+    def _init_firebase_admin(self) -> bool:
+        if self._admin_initialized or not self.firebase_config.can_verify_tokens():
+            return bool(firebase_admin and firebase_admin._apps)
+        try:
+            if firebase_admin._apps:
+                self._admin_initialized = True
+                return True
+            if self.firebase_config.service_account_json:
+                cred_dict = json.loads(self.firebase_config.service_account_json)
+                cred = fb_credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+            elif self.firebase_config.service_account_path:
+                cred = fb_credentials.Certificate(self.firebase_config.service_account_path)
+                firebase_admin.initialize_app(cred)
+            else:
+                return False
+            self._admin_initialized = True
+            return True
+        except Exception as e:
+            logger.warning("Firebase Admin init failed: %s", e)
+            return False
+
+    def is_configured(self) -> bool:
+        return self.firebase_config.is_configured()
+
+    def is_authenticated(self) -> bool:
+        return self.session.is_authenticated()
+
+    def get_user(self) -> Optional[Dict[str, Any]]:
+        return self.session.get_user()
+
+    def get_user_email(self) -> Optional[str]:
+        return self.session.get_user_email()
+
+    def logout(self) -> None:
+        self.session.logout()
+
+    def is_admin(self, email: Optional[str] = None) -> bool:
+        email = email or self.get_user_email()
+        return email in self.config.admin_users if email else False
+
+    def verify_id_token(self, id_token: str) -> Optional[Dict[str, Any]]:
+        """Verify Firebase ID token with Admin SDK. Returns user info or None. No unverified decode."""
+        if not self.firebase_config.can_verify_tokens():
+            logger.warning("Firebase Admin not available; cannot verify token")
+            return None
+        if not self._init_firebase_admin():
+            return None
+        try:
+            decoded = firebase_auth.verify_id_token(id_token)
+            return {
+                "email": decoded.get("email"),
+                "name": decoded.get("name", (decoded.get("email") or "").split("@")[0]),
+                "id": decoded.get("uid"),
+            }
+        except Exception as e:
+            logger.warning("Firebase token verification failed: %s", e)
+            return None
+
+    def get_login_component(self, redirect_base_url: str) -> str:
+        """Return HTML/JS for Firebase Google Sign-In. On success, redirects to redirect_base_url?firebase_token=ID_TOKEN (server then exchanges for one-time code)."""
+        cfg = self.firebase_config.get_firebase_config_js()
+        return f"""
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+<script>
+(function() {{
+  const firebaseConfig = {{{cfg}}};
+  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  const provider = new firebase.auth.GoogleAuthProvider();
+  window.firebaseSignIn = function() {{
+    firebase.auth().signInWithPopup(provider).then(function(result) {{
+      return result.user.getIdToken();
+    }}).then(function(idToken) {{
+      var url = "{redirect_base_url}".replace(/\\?.*$/, "");
+      url += (url.indexOf("?") >= 0 ? "&" : "?") + "firebase_token=" + encodeURIComponent(idToken);
+      window.top.location.href = url;
+    }}).catch(function(e) {{ console.error(e); alert("Sign-in failed: " + (e.message || "Unknown error")); }});
+  }};
+}})();
+</script>
+<div class="firebase-login-container" style="text-align:center;padding:1rem;">
+  <button onclick="firebaseSignIn()" style="padding:0.6rem 1.2rem;font-size:1rem;cursor:pointer;background:#4285f4;color:white;border:none;border-radius:6px;">
+    Sign in with Google
+  </button>
+</div>
+"""
+
+
 def get_auth_manager() -> Any:
-    """Return AuthManager if OAuth configured; else DemoAuthManager only when not production."""
+    """Return FirebaseAuthManager if Firebase configured; else AuthManager if OAuth; else DemoAuthManager when not production."""
     config = AuthConfig()
+    firebase_config = FirebaseConfig()
+    if firebase_config.is_configured():
+        return FirebaseAuthManager()
     if config.is_configured():
         return AuthManager()
     if config.is_production:
         raise RuntimeError(
-            "OAuth must be configured when ENV=production. Set OAUTH_PROVIDER and provider credentials."
+            "Auth must be configured when ENV=production. In Streamlit Cloud go to App → Settings → Secrets and add:\n\n"
+            "For Firebase: FIREBASE_PROJECT_ID, FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN\n"
+            "(Or for OAuth: OAUTH_PROVIDER and provider credentials.)"
         )
     return DemoAuthManager()
 
@@ -696,8 +902,16 @@ def create_firebase_code_for_user_info(user_info: Dict[str, Any], secret: str) -
     return auth_store.save_firebase_code(payload, Path(__file__).parent.parent / "database" / "auth_store.db")
 
 
-def exchange_firebase_code_for_session(auth_manager: "AuthManager", code: str) -> bool:
-    """Exchange one-time code for session (no token in URL). Returns True if session was created."""
+def firebase_token_to_code(firebase_auth_manager: "FirebaseAuthManager", id_token: str) -> Optional[str]:
+    """Verify Firebase ID token and return a one-time code for redirect (so token is not left in URL). Returns None if verification fails."""
+    user_info = firebase_auth_manager.verify_id_token(id_token)
+    if not user_info or not user_info.get("email"):
+        return None
+    return create_firebase_code_for_user_info(user_info, firebase_auth_manager.config.session_secret)
+
+
+def exchange_firebase_code_for_session(auth_manager: Any, code: str) -> bool:
+    """Exchange one-time code for session (no token in URL). auth_manager: AuthManager or FirebaseAuthManager. Returns True if session was created."""
     store_path = Path(__file__).parent.parent / "database" / "auth_store.db"
     encrypted = auth_store.consume_firebase_code(code, store_path)
     if not encrypted:
