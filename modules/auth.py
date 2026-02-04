@@ -850,13 +850,14 @@ class FirebaseAuthManager:
 
 
 def get_auth_manager() -> Any:
-    """Return FirebaseAuthManager if Firebase configured; else AuthManager if OAuth; else DemoAuthManager when not production."""
+    """Return AuthManager (OAuth) if configured; else FirebaseAuthManager if Firebase configured; else DemoAuthManager when not production.
+    OAuth is preferred when both are set so sign-in works in embedded contexts (e.g. Streamlit iframe) where Firebase popup fails."""
     config = AuthConfig()
     firebase_config = FirebaseConfig()
-    if firebase_config.is_configured():
-        return FirebaseAuthManager()
     if config.is_configured():
         return AuthManager()
+    if firebase_config.is_configured():
+        return FirebaseAuthManager()
     if config.is_production:
         raise RuntimeError(
             "Auth must be configured when ENV=production. In Streamlit Cloud go to App → Settings → Secrets and add:\n\n"
