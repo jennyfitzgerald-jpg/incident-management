@@ -120,7 +120,10 @@ def handle_oauth_callback() -> bool:
         st.rerun()
     else:
         st.error("Authentication failed. Please try again.")
+        st.caption("If this keeps happening, ensure **OAUTH_REDIRECT_URI** in Streamlit Secrets exactly matches this app's URL and the Authorized redirect URI in Google Cloud Console.")
         st.query_params.clear()
+        if st.button("Sign in again"):
+            st.rerun()
     return success
 
 
@@ -243,30 +246,47 @@ def _show_incident_log():
         elif not ai_incident.is_ai_configured():
             st.warning("AI is not configured. Use the **Advanced — Log manually** form at the bottom of this page.")
         else:
-            with st.spinner("AI is classifying, logging, and generating the formal report…"):
-                incident_id, inc_dict, report_text, flagged = ai_incident.quick_log_incident(
-                    quick_text,
-                    jurisdiction_fallback=quick_jurisdiction,
-                    reported_by=reported_by,
-                    reported_by_email=reported_by_email,
-                    create_incident_fn=lambda t, d, typ, sev, rb, rbe, j: incidents.create_incident(
-                        title=t, description=d, incident_type=typ, severity=sev,
-                        reported_by=rb, reported_by_email=rbe, jurisdiction=j,
-                    ),
-                    update_report_fn=incidents.update_incident_formal_report,
-                    get_flagged_fn=escalation.get_flagged_for,
-                    get_recommendations_fn=_get_decision_tree_recommendations,
-                )
-            if incident_id is not None:
-                st.success(f"**Incident #{incident_id}** logged. Type: {inc_dict.get('incident_type')} · Severity: {inc_dict.get('severity')} · Jurisdiction: {inc_dict.get('jurisdiction')}.")
-                if flagged:
-                    st.caption("**Flagged for:** " + ", ".join(flagged))
-                if report_text:
-                    with st.expander("Formal report (auto-generated)", expanded=True):
-                        st.text_area("Report", value=report_text, height=220, key="quick_report_preview", disabled=True)
-                        st.caption("You can edit this in the incident list under « View / Edit formal report ».")
-            else:
+            err_msg = None
+            try:
+                with st.spinner("AI is classifying, logging, and generating the formal report…"):
+                    result = ai_incident.quick_log_incident(
+                        quick_text,
+                        jurisdiction_fallback=quick_jurisdiction,
+                        reported_by=reported_by,
+                        reported_by_email=reported_by_email,
+                        create_incident_fn=lambda t, d, typ, sev, rb, rbe, j: incidents.create_incident(
+                            title=t, description=d, incident_type=typ, severity=sev,
+                            reported_by=rb, reported_by_email=rbe, jurisdiction=j,
+                        ),
+                        update_report_fn=incidents.update_incident_formal_report,
+                        get_flagged_fn=escalation.get_flagged_for,
+                        get_recommendations_fn=_get_decision_tree_recommendations,
+                    )
+                    # Support both 4- and 5-value return (5-value includes error_message)
+                    if len(result) == 5:
+                        incident_id, inc_dict, report_text, flagged, err_msg = result
+                    else:
+                        incident_id, inc_dict, report_text, flagged = result
+                        err_msg = None
+                if incident_id is not None:
+                    st.success(f"**Incident #{incident_id}** logged. Type: {inc_dict.get('incident_type')} · Severity: {inc_dict.get('severity')} · Jurisdiction: {inc_dict.get('jurisdiction')}.")
+                    if flagged:
+                        st.caption("**Flagged for:** " + ", ".join(flagged))
+                    if report_text:
+                        with st.expander("Formal report (auto-generated)", expanded=True):
+                            st.text_area("Report", value=report_text, height=220, key="quick_report_preview", disabled=True)
+                            st.caption("You can edit this in the incident list under « View / Edit formal report ».")
+                else:
+                    st.error(err_msg or "Something went wrong. Try **Advanced — Log manually** at the bottom of this page.")
+                    if err_msg:
+                        with st.expander("Error details", expanded=False):
+                            st.code(err_msg)
+            except Exception as e:
                 st.error("Something went wrong. Try **Advanced — Log manually** at the bottom of this page.")
+                with st.expander("Error details (for support)", expanded=True):
+                    st.code(str(e))
+                import traceback
+                st.caption(traceback.format_exc())
 
     st.markdown("---")
     st.markdown("**Recent incidents**")

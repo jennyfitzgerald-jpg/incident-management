@@ -37,6 +37,10 @@ INCIDENT_TYPE_LABELS = [
 ]
 SEVERITY_LABELS = ["Low", "Medium", "High", "Critical"]
 
+# Domain context for Diagnexia (outsourced pathology) — used in parse and report prompts
+DIAGNEXIA_CONTEXT = """Context: Diagnexia is an outsourced digital pathology provider. We receive slides/specimens from client sites, process and scan them, and deliver results. Severity should reflect impact on turnaround time (TAT), patient/sample safety, and need for recuts or re-sends from the client.
+Examples: Broken or damaged slides in transit → Specimen / sample, Medium severity (TAT compromised; recuts from client site required). Mislabeled slide → Specimen / sample, Medium or High depending on whether it was caught before reporting. Equipment failure delaying scans → Equipment / system, severity by impact on TAT and workload."""
+
 
 def _get_secret(key: str) -> str:
     """Get key from env or st.secrets."""
@@ -141,7 +145,9 @@ def parse_incident_description(free_text: str) -> Optional[dict]:
 
     types_str = ", ".join(repr(s) for s in INCIDENT_TYPE_LABELS)
     severities_str = ", ".join(repr(s) for s in SEVERITY_LABELS)
-    prompt = f"""You are helping to log a laboratory/pathology incident. The user has provided a short description. Extract structured fields from it.
+    prompt = f"""You are helping to log an incident for Diagnexia (an outsourced digital pathology provider). The user has provided a short description. Extract structured fields and assign severity based on impact on turnaround time, patient/sample safety, and need for recuts or re-sends from the client.
+
+{DIAGNEXIA_CONTEXT}
 
 Allowed incident_type (use exactly one): {types_str}
 Allowed severity (use exactly one): {severities_str}
@@ -229,7 +235,11 @@ def generate_formal_report(
     if flagged_for:
         escalation_blob = f"\nEscalation / who has been flagged: {', '.join(flagged_for)}. Include a short line in the report that these parties have been flagged."
 
-    prompt = f"""Write a short formal incident report for the following laboratory/pathology incident. Use a professional tone. Structure the report with these sections:
+    prompt = f"""Write a short formal incident report for Diagnexia (outsourced digital pathology provider). Use a professional tone. Consider impact on turnaround time, client recuts, and sample/slide integrity where relevant.
+
+{DIAGNEXIA_CONTEXT}
+
+Structure the report with these sections:
 
 1. **Summary** – What happened, severity, type, and jurisdiction (1–2 sentences).
 2. **Root cause** – Inferred from the description; 1–2 sentences.
@@ -258,28 +268,39 @@ def quick_log_incident(
     update_report_fn=None,
     get_flagged_fn=None,
     get_recommendations_fn=None,
-) -> Tuple[Optional[int], Optional[dict], Optional[str], List[str]]:
+) -> Tuple[Optional[int], Optional[dict], Optional[str], List[str], Optional[str]]:
     """
     One-step agentic flow: parse → create incident → get recommendations → generate report (with root cause + mitigating actions) → save.
     get_recommendations_fn(incident_type_label, severity_label) -> list of strings (from decision tree).
+    Returns (incident_id, inc_dict, report_text, flagged, error_message).
     """
     if not free_text or not free_text.strip():
-        return (None, None, None, [])
-    parsed = parse_incident_description(free_text)
-    if not parsed or not create_incident_fn:
-        return (None, None, None, [])
+        return (None, None, None, [], "Please enter a short description.")
+    try:
+        parsed = parse_incident_description(free_text)
+    except Exception as e:
+        logger.exception("parse_incident_description failed")
+        return (None, None, None, [], f"AI parse failed: {str(e)}. Try again or use Advanced — Log manually.")
+    if not parsed:
+        return (None, None, None, [], "AI could not parse the description (API key valid? Try again or use Advanced — Log manually).")
+    if not create_incident_fn:
+        return (None, None, None, [], "Configuration error: create_incident not set.")
     jurisdiction = (parsed.get("jurisdiction") or "").strip() or (jurisdiction_fallback or "UK")
-    incident_id = create_incident_fn(
-        title=parsed.get("title", ""),
-        description=parsed.get("description", ""),
-        incident_type=parsed.get("incident_type", "Other"),
-        severity=parsed.get("severity", "Low"),
-        reported_by=reported_by,
-        reported_by_email=reported_by_email,
-        jurisdiction=jurisdiction,
-    )
+    try:
+        incident_id = create_incident_fn(
+            title=parsed.get("title", ""),
+            description=parsed.get("description", ""),
+            incident_type=parsed.get("incident_type", "Other"),
+            severity=parsed.get("severity", "Low"),
+            reported_by=reported_by,
+            reported_by_email=reported_by_email,
+            jurisdiction=jurisdiction,
+        )
+    except Exception as e:
+        logger.exception("create_incident failed")
+        return (None, parsed, None, [], f"Could not save incident: {str(e)}")
     if not incident_id:
-        return (None, parsed, None, [])
+        return (None, parsed, None, [], "Could not save incident (database returned no id).")
     incident_dict = {
         **parsed,
         "id": incident_id,
@@ -299,4 +320,4 @@ def quick_log_incident(
         )
         if report_text:
             update_report_fn(incident_id, report_text)
-    return (incident_id, incident_dict, report_text, flagged)
+    return (incident_id, incident_dict, report_text, flagged, None)
