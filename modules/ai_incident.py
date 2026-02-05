@@ -12,6 +12,9 @@ from typing import Optional, Tuple, List
 
 logger = logging.getLogger(__name__)
 
+# Last error from _call_llm (set on API exception, cleared on success) — for user-facing message
+_last_llm_error: Optional[str] = None
+
 # #region agent log
 def _agent_log(location: str, message: str, data: dict = None):
     try:
@@ -88,7 +91,10 @@ def _call_llm(prompt: str, max_tokens: int = 1024) -> Optional[str]:
     """
     Call LLM with the given prompt. Uses Anthropic if ANTHROPIC_API_KEY is set,
     else OpenAI if OPENAI_API_KEY is set. Returns response text or None.
+    On failure, sets _last_llm_error for user-facing diagnostics.
     """
+    global _last_llm_error
+    _last_llm_error = None
     anthropic_key = _get_anthropic_key()
     openai_key = _get_openai_key()
     # #region agent log
@@ -107,6 +113,7 @@ def _call_llm(prompt: str, max_tokens: int = 1024) -> Optional[str]:
             return text.strip() if text else None
         except Exception as e:
             logger.warning("Anthropic API call failed: %s", e)
+            _last_llm_error = str(e)
             # #region agent log
             _agent_log("ai_incident._call_llm", "anthropic_error", {"error": str(e)})
             # #endregion
@@ -124,6 +131,7 @@ def _call_llm(prompt: str, max_tokens: int = 1024) -> Optional[str]:
             return text if text else None
         except Exception as e:
             logger.warning("OpenAI API call failed: %s", e)
+            _last_llm_error = str(e)
             # #region agent log
             _agent_log("ai_incident._call_llm", "openai_error", {"error": str(e)})
             # #endregion
@@ -290,7 +298,10 @@ def quick_log_incident(
         logger.exception("parse_incident_description failed")
         return (None, None, None, [], f"AI parse failed: {str(e)}. Try again or use Advanced — Log manually.")
     if not parsed:
-        return (None, None, None, [], "AI could not parse the description (API key valid? Try again or use Advanced — Log manually).")
+        detail = ""
+        if _last_llm_error:
+            detail = f" API error: {_last_llm_error}"
+        return (None, None, None, [], f"AI could not parse the description.{detail} Check API key in Secrets or use Advanced — Log manually.")
     if not create_incident_fn:
         return (None, None, None, [], "Configuration error: create_incident not set.")
     jurisdiction = (parsed.get("jurisdiction") or "").strip() or (jurisdiction_fallback or "UK")
