@@ -164,19 +164,27 @@ User description:
 {free_text.strip()}
 ---
 
-Return only the JSON object, no markdown or explanation."""
+Output ONLY the raw JSON object. No markdown, no code fences, no text before or after."""
 
     text = _call_llm(prompt)
     if not text:
+        text = _call_llm(prompt)  # Retry once on transient failure
+    if not text:
         return None
+    text = text.strip()
     # Strip markdown code block if present
-    if text.strip().startswith("```"):
-        lines = text.strip().split("\n")
+    if text.startswith("```"):
+        lines = text.split("\n")
         if lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines)
+    # Extract JSON object if model added text around it (e.g. "Here is the result: {...}")
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start : end + 1]
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
