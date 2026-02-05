@@ -63,6 +63,9 @@ Your **redirect URI** will be your **live app URL** (you get this in step 3). Us
    GOOGLE_CLIENT_SECRET = "your-google-client-secret"
    SESSION_TIMEOUT_MINUTES = "60"
    ADMIN_USERS = "admin@yourdomain.com"
+   # Optional: AI incident intake and formal reports (either key enables; Anthropic preferred if both set)
+   # ANTHROPIC_API_KEY = "your-anthropic-api-key"
+   # OPENAI_API_KEY = "your-openai-api-key"
    ```
 
    **Important:** Replace `https://YOUR-APP-NAME.streamlit.app/` with the **exact** URL Streamlit shows for your app (e.g. after first deploy). Then in Google (or Azure) set that **exact** URL as the redirect URI.
@@ -79,6 +82,7 @@ Your **redirect URI** will be your **live app URL** (you get this in step 3). Us
 - **OAUTH_REDIRECT_URI** must match the **live app URL** and what you registered in Google/Azure.
 - **SESSION_SECRET_KEY** must be set (long random string); the app uses it for signing and encryption.
 - Users open the public link → **Sign in** → redirect to Google (or Azure) → after login they return to your app and see the dashboard.
+- **Optional:** Set **either** `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` in Secrets to enable the smart incident flow (one summary → AI classifies, assigns risk/escalation, and generates a report with root cause and mitigating actions). If both are set, Anthropic is used. If neither is set, the manual incident form and reports still work.
 
 ---
 

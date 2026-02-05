@@ -1,0 +1,19 @@
+{
+  "description": "Who needs to be aware per incident. Edit this file to add or change contacts.",
+  "all_incidents": [
+    { "role": "Quality", "name": "Asha Velani" },
+    { "role": "Information Security", "name": "Sally Jacobs" },
+    { "role": "Data Protection", "name": "Elizabeth Murphy" }
+  ],
+  "high_risk": [
+    { "role": "CMO", "name": "Runjan Chetty" }
+  ],
+  "jurisdiction_teams": {
+    "UK": [
+      { "label": "UK Lab Team", "email": "uk-lab-team@diagnexia.com" }
+    ],
+    "US": [
+      { "label": "US Lab Team", "email": "us-lab-team@diagnexia.com" }
+    ]
+  }
+}

@@ -19,7 +19,7 @@ def _get_conn():
 
 
 def init_db():
-    """Create incidents table if it does not exist."""
+    """Create incidents table if it does not exist; add formal_report column if missing."""
     conn = _get_conn()
     try:
         conn.execute("""
@@ -30,14 +30,22 @@ def init_db():
                 incident_type TEXT NOT NULL,
                 severity TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'open',
+                jurisdiction TEXT,
                 reported_by TEXT,
                 reported_by_email TEXT,
                 reported_at TEXT NOT NULL,
                 updated_at TEXT,
-                resolution_notes TEXT
+                resolution_notes TEXT,
+                formal_report TEXT
             )
         """)
         conn.commit()
+        for col in ("formal_report", "jurisdiction"):
+            try:
+                conn.execute(f"ALTER TABLE incidents ADD COLUMN {col} TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
     finally:
         conn.close()
 
@@ -49,6 +57,7 @@ def create_incident(
     severity: str,
     reported_by: str = "",
     reported_by_email: str = "",
+    jurisdiction: str = "",
 ) -> int:
     """Insert a new incident. Returns the new id."""
     init_db()
@@ -57,10 +66,10 @@ def create_incident(
     try:
         cur = conn.execute(
             """
-            INSERT INTO incidents (title, description, incident_type, severity, status, reported_by, reported_by_email, reported_at, updated_at)
-            VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)
+            INSERT INTO incidents (title, description, incident_type, severity, status, jurisdiction, reported_by, reported_by_email, reported_at, updated_at)
+            VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
             """,
-            (title, description, incident_type, severity, reported_by, reported_by_email, now, now),
+            (title, description, incident_type, severity, jurisdiction or "", reported_by, reported_by_email, now, now),
         )
         conn.commit()
         return cur.lastrowid
@@ -72,6 +81,7 @@ def list_incidents(
     status: Optional[str] = None,
     incident_type: Optional[str] = None,
     severity: Optional[str] = None,
+    jurisdiction: Optional[str] = None,
     limit: int = 500,
 ) -> list[dict]:
     """Return incidents as list of dicts, optional filters."""
@@ -89,6 +99,9 @@ def list_incidents(
         if severity:
             q += " AND severity = ?"
             params.append(severity)
+        if jurisdiction:
+            q += " AND jurisdiction = ?"
+            params.append(jurisdiction)
         q += " ORDER BY reported_at DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(q, params).fetchall()
@@ -119,5 +132,19 @@ def get_incident(incident_id: int) -> Optional[dict]:
     try:
         row = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_incident_formal_report(incident_id: int, formal_report: str) -> bool:
+    """Update the formal report for an incident. Returns True if a row was updated."""
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE incidents SET formal_report = ?, updated_at = ? WHERE id = ?",
+            (formal_report, datetime.utcnow().isoformat() + "Z", incident_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()

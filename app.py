@@ -8,12 +8,35 @@ import os
 import csv
 import io
 import json
+import time
 from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-# Load .env for local development
+# #region agent log
+def _debug_log(location: str, message: str, data: dict = None, hypothesis_id: str = None):
+    payload = {"sessionId": "debug-session", "runId": "run1", "location": location, "message": message, "timestamp": int(time.time() * 1000)}
+    if data is not None:
+        payload["data"] = data
+    if hypothesis_id:
+        payload["hypothesisId"] = hypothesis_id
+    line = json.dumps(payload) + "\n"
+    for log_path in [
+        Path(__file__).resolve().parent / ".cursor" / "debug.log",
+        Path(os.getcwd()) / ".cursor" / "debug.log",
+    ]:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line)
+            break
+        except Exception:
+            continue
+# #endregion
+
+# Load .env for local development (from cwd and from app directory)
 load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # On Streamlit Community Cloud (and similar), secrets are in st.secrets — copy into os.environ
 # so AuthConfig and modules read them. setdefault so .env wins when both exist.
@@ -30,6 +53,7 @@ if hasattr(st, "secrets") and st.secrets:
         "FIREBASE_PROJECT_ID", "FIREBASE_API_KEY", "FIREBASE_AUTH_DOMAIN",
         "SESSION_SECRET_KEY", "ENV",
         "OAUTH_PROVIDER", "OAUTH_REDIRECT_URI", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
     )
     for key in force_keys:
         try:
@@ -55,6 +79,8 @@ from modules.auth import (
     exchange_firebase_code_for_session,
 )
 from modules import incidents
+from modules import ai_incident
+from modules import escalation
 
 # Initialize auth (Firebase, OAuth, or demo)
 try:
@@ -142,83 +168,216 @@ def _load_decision_tree():
         return json.load(f)
 
 
+def _get_decision_tree_recommendations(incident_type_label: str, severity_label: str) -> list:
+    """
+    Return list of recommendation strings from decision_tree.json for the given type and severity.
+    Maps app labels to tree ids (e.g. 'Specimen / sample' -> specimen, 'Low' -> low).
+    """
+    tree = _load_decision_tree()
+    if not tree or not isinstance(tree.get("recommendations"), dict):
+        return []
+    recs = tree["recommendations"]
+    type_id = "other"
+    for t in tree.get("incident_types") or []:
+        label = (t.get("label") or "").strip()
+        if not label:
+            continue
+        if incident_type_label == label or (incident_type_label and (incident_type_label in label or label.startswith(incident_type_label))):
+            type_id = t.get("id") or "other"
+            break
+    severity_id = (severity_label or "").strip().lower() or "low"
+    by_type = recs.get(type_id)
+    if not isinstance(by_type, dict):
+        return []
+    actions = by_type.get(severity_id)
+    if isinstance(actions, list):
+        return [str(a).strip() for a in actions if a]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Dashboard: Incident log
 # ---------------------------------------------------------------------------
+INCIDENT_TYPES = ["Specimen / sample", "Imaging / slide quality", "Workflow / process", "Equipment / system", "Safety / compliance", "Other"]
+SEVERITIES = ["Low", "Medium", "High", "Critical"]
+JURISDICTIONS = escalation.get_jurisdictions() if hasattr(escalation, "get_jurisdictions") else ["UK", "US"]
+
+
 def _show_incident_log():
+    # #region agent log
+    _debug_log("app.py:_show_incident_log", "Entry", {}, "H1")
+    # #endregion
     st.subheader("Incident log")
     st.markdown("Log and track digital pathology incidents.")
 
     user = auth.get_user()
     reported_by = user.get("name") or ""
     reported_by_email = user.get("email") or ""
+    # #region agent log
+    _debug_log("app.py:_show_incident_log", "After get_user", {"has_user": bool(user)}, "H2")
+    # #endregion
 
-    with st.expander("➕ Log a new incident", expanded=True):
-        with st.form("new_incident"):
-            title = st.text_input("Title *", placeholder="Short description of the incident")
-            description = st.text_area("Description", placeholder="What happened? When? Where?")
-            col1, col2 = st.columns(2)
+    # ---- Single "Log incident" entry: one summary + jurisdiction + one button (always first) ----
+    ai_status = ai_incident.get_ai_status()
+    st.caption(f"**LLM status:** {ai_status}" + (" — one-step AI flow is available." if ai_status != "Not configured" else " — set OPENAI_API_KEY or ANTHROPIC_API_KEY in `.env` (local) or Streamlit Secrets (deploy) to enable."))
+    st.info("**One-step logging:** Enter a short summary in the box below (1–2 sentences), choose jurisdiction, then click **Log incident**. AI will classify type and severity and generate a formal report. No need to fill type or severity manually.")
+    if not ai_incident.is_ai_configured():
+        st.warning("Set **ANTHROPIC_API_KEY** or **OPENAI_API_KEY** in Secrets (or `.env` locally) to enable the smart flow. Until then, use **Advanced — Log manually** at the bottom of this page.")
+    # #region agent log
+    _debug_log("app.py:_show_incident_log", "About to render summary text_area", {}, "H2")
+    # #endregion
+    quick_text = st.text_area(
+        "Describe what happened (one or two sentences)",
+        placeholder="e.g. Slide 45 mislabeled, wrong block, found at QC in the UK lab.",
+        key="quick_log_text",
+        height=120,
+        label_visibility="visible",
+    )
+    quick_jurisdiction = st.selectbox("Jurisdiction", JURISDICTIONS, key="quick_jurisdiction")
+    # #region agent log
+    _debug_log("app.py:_show_incident_log", "After summary text_area and jurisdiction", {"jurisdictions_count": len(JURISDICTIONS)}, "H3")
+    # #endregion
+    if st.button("Log incident", type="primary", key="quick_log_btn"):
+        if not quick_text or not quick_text.strip():
+            st.warning("Please enter a short description.")
+        elif not ai_incident.is_ai_configured():
+            st.warning("AI is not configured. Use the **Advanced — Log manually** form at the bottom of this page.")
+        else:
+            with st.spinner("AI is classifying, logging, and generating the formal report…"):
+                incident_id, inc_dict, report_text, flagged = ai_incident.quick_log_incident(
+                    quick_text,
+                    jurisdiction_fallback=quick_jurisdiction,
+                    reported_by=reported_by,
+                    reported_by_email=reported_by_email,
+                    create_incident_fn=lambda t, d, typ, sev, rb, rbe, j: incidents.create_incident(
+                        title=t, description=d, incident_type=typ, severity=sev,
+                        reported_by=rb, reported_by_email=rbe, jurisdiction=j,
+                    ),
+                    update_report_fn=incidents.update_incident_formal_report,
+                    get_flagged_fn=escalation.get_flagged_for,
+                    get_recommendations_fn=_get_decision_tree_recommendations,
+                )
+            if incident_id is not None:
+                st.success(f"**Incident #{incident_id}** logged. Type: {inc_dict.get('incident_type')} · Severity: {inc_dict.get('severity')} · Jurisdiction: {inc_dict.get('jurisdiction')}.")
+                if flagged:
+                    st.caption("**Flagged for:** " + ", ".join(flagged))
+                if report_text:
+                    with st.expander("Formal report (auto-generated)", expanded=True):
+                        st.text_area("Report", value=report_text, height=220, key="quick_report_preview", disabled=True)
+                        st.caption("You can edit this in the incident list under « View / Edit formal report ».")
+            else:
+                st.error("Something went wrong. Try **Advanced — Log manually** at the bottom of this page.")
+
+    st.markdown("---")
+    st.markdown("**Recent incidents**")
+    filter_status = st.selectbox("Filter by status", ["All", "open", "in_progress", "resolved", "closed"], key="filter_status")
+    filter_type = st.selectbox("Filter by type", ["All"] + INCIDENT_TYPES, key="filter_type")
+    filter_severity = st.selectbox("Filter by severity", ["All"] + SEVERITIES, key="filter_severity")
+    filter_jurisdiction = st.selectbox("Filter by jurisdiction", ["All"] + JURISDICTIONS, key="filter_jurisdiction")
+
+    status_arg = None if filter_status == "All" else filter_status
+    type_arg = None if filter_type == "All" else filter_type
+    severity_arg = None if filter_severity == "All" else filter_severity
+    jurisdiction_arg = None if filter_jurisdiction == "All" else filter_jurisdiction
+
+    rows = incidents.list_incidents(status=status_arg, incident_type=type_arg, severity=severity_arg, jurisdiction=jurisdiction_arg)
+    if not rows:
+        st.info("No incidents match the filters.")
+    else:
+        for inc in rows:
+            with st.container():
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    jur = inc.get("jurisdiction") or "—"
+                    st.markdown(f"**{inc['title']}** — {inc['incident_type']} · {inc['severity']} · {inc['status']} · **{jur}**")
+                    if inc.get("description"):
+                        st.caption(inc["description"][:200] + ("..." if len(inc.get("description", "")) > 200 else ""))
+                    flagged = escalation.get_flagged_for(inc)
+                    if flagged:
+                        st.caption("**Flagged for:** " + ", ".join(flagged))
+                    st.caption(f"Reported by {inc.get('reported_by') or inc.get('reported_by_email') or '—'} on {inc.get('reported_at', '')[:10]}")
+                with col2:
+                    if inc["status"] == "open" or inc["status"] == "in_progress":
+                        new_status = st.selectbox(
+                            "Update status",
+                            ["open", "in_progress", "resolved", "closed"],
+                            index=["open", "in_progress", "resolved", "closed"].index(inc["status"]),
+                            key=f"status_{inc['id']}",
+                        )
+                        if new_status != inc["status"]:
+                            if st.button("Save", key=f"save_{inc['id']}"):
+                                incidents.update_incident_status(inc["id"], new_status)
+                                st.rerun()
+                with st.expander("View / Edit formal report", expanded=False):
+                    existing = (inc.get("formal_report") or "").strip()
+                    if existing:
+                        edited = st.text_area("Edit report", value=existing, height=200, key=f"report_edit_{inc['id']}")
+                        if st.button("Save report", key=f"save_report_{inc['id']}"):
+                            incidents.update_incident_formal_report(inc["id"], edited)
+                            st.success("Report saved.")
+                            st.rerun()
+                    else:
+                        if ai_incident.is_ai_configured():
+                            if st.button("Generate formal report", key=f"gen_report_{inc['id']}"):
+                                with st.spinner("Generating..."):
+                                    mitigating = _get_decision_tree_recommendations(inc.get("incident_type") or "", inc.get("severity") or "")
+                                    flagged = list(escalation.get_flagged_for(inc))
+                                    report_text = ai_incident.generate_formal_report(
+                                        inc,
+                                        mitigating_actions=mitigating if mitigating else None,
+                                        flagged_for=flagged if flagged else None,
+                                    )
+                                if report_text:
+                                    incidents.update_incident_formal_report(inc["id"], report_text)
+                                    st.success("Report generated. You can edit it above.")
+                                    st.rerun()
+                                else:
+                                    st.error("Generation failed; please try again.")
+                        else:
+                            st.caption("Set ANTHROPIC_API_KEY or OPENAI_API_KEY to generate a formal report.")
+                st.markdown("---")
+
+    # Advanced manual form at the bottom so the one-step summary is always the first form
+    st.markdown("---")
+    with st.expander("Advanced — Log manually", expanded=False):
+        st.caption("Use this form when you need to set type, severity, and title yourself.")
+        with st.form("new_incident_manual"):
+            title = st.text_input("Title *", placeholder="Short description of the incident", key="man_title")
+            description = st.text_area("Description", placeholder="What happened? When? Where?", key="man_desc")
+            col1, col2, col3 = st.columns(3)
             with col1:
-                incident_type = st.selectbox(
-                    "Incident type *",
-                    ["Specimen / sample", "Imaging / slide quality", "Workflow / process", "Equipment / system", "Safety / compliance", "Other"],
-                )
+                incident_type = st.selectbox("Incident type *", INCIDENT_TYPES, key="man_type")
             with col2:
-                severity = st.selectbox(
-                    "Severity *",
-                    ["Low", "Medium", "High", "Critical"],
-                )
+                severity = st.selectbox("Severity *", SEVERITIES, key="man_sev")
+            with col3:
+                jurisdiction = st.selectbox("Jurisdiction *", JURISDICTIONS, key="man_jurisdiction")
             if st.form_submit_button("Submit incident"):
-                if not title or not incident_type or not severity:
-                    st.warning("Please fill in at least title, type, and severity.")
+                if not title or not incident_type or not severity or not jurisdiction:
+                    st.warning("Please fill in title, type, severity, and jurisdiction.")
                 else:
-                    incidents.create_incident(
+                    incident_id = incidents.create_incident(
                         title=title,
                         description=description,
                         incident_type=incident_type,
                         severity=severity,
                         reported_by=reported_by,
                         reported_by_email=reported_by_email,
+                        jurisdiction=jurisdiction,
                     )
-                    st.success("Incident logged.")
+                    inc_dict = {"title": title, "description": description, "incident_type": incident_type, "severity": severity, "jurisdiction": jurisdiction, "reported_at": ""}
+                    flagged = list(escalation.get_flagged_for(inc_dict))
+                    if ai_incident.is_ai_configured():
+                        mitigating = _get_decision_tree_recommendations(incident_type, severity)
+                        with st.spinner("Generating formal report..."):
+                            report_text = ai_incident.generate_formal_report(
+                                inc_dict,
+                                mitigating_actions=mitigating if mitigating else None,
+                                flagged_for=flagged if flagged else None,
+                            )
+                        if report_text:
+                            incidents.update_incident_formal_report(incident_id, report_text)
+                    st.success("Incident logged. **Flagged for:** " + ", ".join(flagged) if flagged else "Incident logged.")
                     st.rerun()
-
-    st.markdown("---")
-    st.markdown("**Recent incidents**")
-    filter_status = st.selectbox("Filter by status", ["All", "open", "in_progress", "resolved", "closed"], key="filter_status")
-    filter_type = st.selectbox("Filter by type", ["All", "Specimen / sample", "Imaging / slide quality", "Workflow / process", "Equipment / system", "Safety / compliance", "Other"], key="filter_type")
-    filter_severity = st.selectbox("Filter by severity", ["All", "Low", "Medium", "High", "Critical"], key="filter_severity")
-
-    status_arg = None if filter_status == "All" else filter_status
-    type_arg = None if filter_type == "All" else filter_type
-    severity_arg = None if filter_severity == "All" else filter_severity
-
-    rows = incidents.list_incidents(status=status_arg, incident_type=type_arg, severity=severity_arg)
-    if not rows:
-        st.info("No incidents match the filters.")
-        return
-
-    for inc in rows:
-        with st.container():
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                st.markdown(f"**{inc['title']}** — {inc['incident_type']} · {inc['severity']} · {inc['status']}")
-                if inc.get("description"):
-                    st.caption(inc["description"][:200] + ("..." if len(inc.get("description", "")) > 200 else ""))
-                st.caption(f"Reported by {inc.get('reported_by') or inc.get('reported_by_email') or '—'} on {inc.get('reported_at', '')[:10]}")
-            with col2:
-                if inc["status"] == "open" or inc["status"] == "in_progress":
-                    new_status = st.selectbox(
-                        "Update status",
-                        ["open", "in_progress", "resolved", "closed"],
-                        index=["open", "in_progress", "resolved", "closed"].index(inc["status"]),
-                        key=f"status_{inc['id']}",
-                    )
-                    if new_status != inc["status"]:
-                        if st.button("Save", key=f"save_{inc['id']}"):
-                            incidents.update_incident_status(inc["id"], new_status)
-                            st.rerun()
-            st.markdown("---")
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +391,8 @@ def _show_decision_support():
         return
 
     st.subheader("Decision support")
-    st.markdown(tree.get("description", "Answer a few questions to get recommended actions and next steps."))
+    st.markdown(tree.get("description", "Reference: type, severity, and recommended actions from the decision tree."))
+    st.caption("Or just use **Log incident** on the Incident log page; AI will classify using this same framework.")
     st.markdown("---")
 
     types = tree.get("incident_types", [])
@@ -272,12 +432,15 @@ def _show_reports():
     # Simple table
     display = []
     for r in rows:
+        flagged = escalation.get_flagged_for(r)
         display.append({
             "ID": r.get("id"),
             "Title": r.get("title"),
             "Type": r.get("incident_type"),
             "Severity": r.get("severity"),
+            "Jurisdiction": r.get("jurisdiction") or "",
             "Status": r.get("status"),
+            "Flagged for": ", ".join(flagged) if flagged else "",
             "Reported by": r.get("reported_by") or r.get("reported_by_email"),
             "Reported at": (r.get("reported_at") or "")[:10],
         })
@@ -286,7 +449,7 @@ def _show_reports():
     # Export CSV
     st.markdown("---")
     buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=["ID", "Title", "Type", "Severity", "Status", "Reported by", "Reported at"])
+    w = csv.DictWriter(buf, fieldnames=["ID", "Title", "Type", "Severity", "Jurisdiction", "Status", "Flagged for", "Reported by", "Reported at"])
     w.writeheader()
     w.writerows(display)
     csv_content = buf.getvalue()
@@ -314,6 +477,9 @@ def show_dashboard():
     )
 
     if page == "Incident log":
+        # #region agent log
+        _debug_log("app.py:show_dashboard", "Rendering Incident log page", {"page": page}, "H1")
+        # #endregion
         _show_incident_log()
     elif page == "Decision support":
         _show_decision_support()

@@ -30,6 +30,8 @@ Security-hardened OAuth implementation per the OAuth Security Audit plan.
 
 With no OAuth configured and `ENV=development`, the app uses demo login. For production, set `ENV=production` and configure OAuth and `SESSION_SECRET_KEY`.
 
+**Optional – AI incident intake and formal reports:** Set **either** `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` (in `.env` or Streamlit Secrets) to enable the smart flow: one summary + jurisdiction → AI classifies, assigns risk and escalation, and generates a formal report (summary, root cause, mitigating actions from the decision tree). If both keys are set, Anthropic is used. If neither is set, the app works with the manual form only.
+
 ## Run tests
 
 From the project root (with Python and dependencies installed):
